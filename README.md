@@ -1,8 +1,14 @@
 # 🐺 Ralph Loop (Event-Driven)
 
-An enhanced [Ralph pattern](https://ghuntley.com/ralph/) implementation with **event-driven notifications** for AI agent loops.
+An enhanced [Ralph pattern](https://ghuntley.com/ralph/) implementation with **event-driven notifications** and **rate-limit resilience** for AI agent loops.
 
-Instead of polling or running blind, the AI agent (Codex, Claude Code, etc.) notifies OpenClaw when it needs attention — decisions, errors, blockers, or completion.
+## Key Features
+
+- 🔔 **Event-driven notifications** — Agent notifies OpenClaw on decisions, errors, completion
+- 💾 **File-based fallback** — Notifications persist to `.ralph/pending-notification.txt` if wake fails
+- 🔄 **Clean sessions** — Each iteration is a fresh agent context (avoids context limits)
+- 📋 **PLANNING/BUILDING modes** — Separate phases for architecture and implementation
+- 🧪 **Backpressure** — Run tests/lints after each implementation
 
 ## What's Different?
 
@@ -11,18 +17,41 @@ Instead of polling or running blind, the AI agent (Codex, Claude Code, etc.) not
 | Bash loop runs until done/fail | Agent notifies on events |
 | Manual monitoring | Automatic escalation |
 | Silent failures | Immediate error alerts |
-| No human-in-loop | Decision requests |
+| No rate-limit handling | File-based notification fallback |
+| Lost notifications | Always recoverable |
 
 ## How It Works
 
 1. **PLANNING phase**: Agent analyzes specs, creates `IMPLEMENTATION_PLAN.md`
 2. **BUILDING phase**: Agent implements tasks one by one, tests, commits
-3. **Notifications**: Agent calls `openclaw gateway wake` when:
-   - `DECISION:` — Needs human input
-   - `ERROR:` — Tests failing after retries
-   - `BLOCKED:` — Missing dependency or unclear spec
-   - `PROGRESS:` — Major milestone complete
-   - `DONE:` — All tasks finished
+3. **Notifications**: Agent writes to `.ralph/pending-notification.txt` AND calls `openclaw gateway wake`
+4. **Recovery**: If wake fails (rate limit), notification persists in file for later processing
+
+### Notification Format
+
+`.ralph/pending-notification.txt`:
+```json
+{
+  "timestamp": "2026-02-07T02:30:00+01:00",
+  "project": "/home/user/my-project",
+  "message": "DONE: All tasks complete.",
+  "iteration": 15,
+  "max_iterations": 20,
+  "cli": "codex",
+  "status": "pending"
+}
+```
+
+### Message Prefixes
+
+| Prefix | Meaning |
+|--------|---------|
+| `DECISION:` | Need human input on a choice |
+| `ERROR:` | Tests failing after retries |
+| `BLOCKED:` | Missing dependency or unclear spec |
+| `PROGRESS:` | Major milestone complete |
+| `DONE:` | All tasks finished |
+| `PLANNING_COMPLETE:` | Ready for BUILDING mode |
 
 ## Quick Start
 
@@ -62,37 +91,26 @@ mkdir specs && echo "# Overview\n\nGoal: ..." > specs/overview.md
 | `RALPH_FLAGS` | `--full-auto` | Flags for the CLI |
 | `RALPH_TEST` | (none) | Test command to run each iteration |
 
-## Example: Antique Catalogue
+## Clean Sessions
+
+Each iteration spawns a **fresh agent session**:
+- `codex exec` starts a new process with no memory
+- Context persists via files: `IMPLEMENTATION_PLAN.md`, `AGENTS.md`, git history
+- This is intentional — avoids context window limits
+
+## Recovery After Rate Limits
+
+If OpenClaw is rate-limited when a notification is sent:
 
 ```bash
-# specs/overview.md
-## Goal
-Web app for cataloguing antique items with metadata, images, and categories.
+# Find pending notifications
+find ~/projects -name "pending-notification.txt" -path "*/.ralph/*"
 
-## Features
-1. CRUD for items (name, description, age, purchase info)
-2. Image upload
-3. Tags and categories
-4. Search and filter
+# Check a specific project
+cat /path/to/project/.ralph/pending-notification.txt
 
-## Tech Stack
-- Python 3.11 + FastAPI
-- SQLite
-- HTMX + Tailwind
-```
-
-Run planning:
-```bash
-cp templates/PROMPT-PLANNING.md PROMPT.md
-# Edit PROMPT.md with the goal
-./scripts/ralph.sh 10
-```
-
-After planning completes, switch to building:
-```bash
-cp templates/PROMPT-BUILDING.md PROMPT.md
-# Edit with same goal
-RALPH_TEST="pytest" ./scripts/ralph.sh 20
+# After processing, clear it
+mv .ralph/pending-notification.txt .ralph/last-notification.txt
 ```
 
 ## Safety

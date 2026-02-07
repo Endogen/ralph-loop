@@ -7,31 +7,100 @@ description: Generate copy-paste bash scripts for Ralph Wiggum/AI agent loops (C
 
 Enhanced Ralph pattern with **event-driven notifications** — Codex/Claude calls OpenClaw when it needs attention instead of polling.
 
-## Overview
+## Key Concepts
 
-The Ralph pattern runs an AI coding agent in a loop:
-1. **PLANNING** → Break requirements into tasks in `IMPLEMENTATION_PLAN.md`
-2. **BUILDING** → Implement tasks one by one, test, commit, repeat
+### Clean Sessions
+Each iteration spawns a **fresh agent session** with clean context. This is intentional:
+- Avoids context window limits
+- Each `codex exec` is a new process with no memory of previous runs
+- Memory persists via files: `IMPLEMENTATION_PLAN.md`, `AGENTS.md`, git history
 
-**Key enhancement:** The agent notifies OpenClaw via `openclaw gateway wake` when:
-- A decision is needed
-- An error occurs
-- It's blocked
-- A milestone completes
+### File-Based Notification Fallback
+If OpenClaw is rate-limited when Codex sends a wake notification:
+1. The notification is written to `.ralph/pending-notification.txt`
+2. Wake is attempted (may fail)
+3. When OpenClaw recovers, it checks for pending notifications
+4. Work is never lost — it's all in git/files
 
 ## File Structure
 
 ```
 project/
-├── PROMPT.md              # Loaded each iteration (mode-specific)
-├── AGENTS.md              # Project context, test commands, learnings
-├── IMPLEMENTATION_PLAN.md # Task list with status
-├── specs/                 # Requirements specs
+├── PROMPT.md                      # Loaded each iteration (mode-specific)
+├── AGENTS.md                      # Project context, test commands, learnings
+├── IMPLEMENTATION_PLAN.md         # Task list with status
+├── specs/                         # Requirements specs
 │   ├── overview.md
 │   └── <feature>.md
 └── .ralph/
-    └── ralph.log          # Execution log
+    ├── ralph.log                  # Execution log
+    ├── pending-notification.txt   # Current pending notification (if any)
+    └── last-notification.txt      # Previous notification (for reference)
 ```
+
+## Notification Format
+
+`.ralph/pending-notification.txt`:
+```json
+{
+  "timestamp": "2026-02-07T02:30:00+01:00",
+  "project": "/home/user/my-project",
+  "message": "DONE: All tasks complete.",
+  "iteration": 15,
+  "max_iterations": 20,
+  "cli": "codex",
+  "status": "pending"
+}
+```
+
+Status values:
+- `pending` — Wake failed or not attempted
+- `delivered` — Wake succeeded
+
+---
+
+## OpenClaw Recovery Procedure
+
+When coming back online after rate limit or downtime, **check for pending notifications**:
+
+```bash
+# Find all pending notifications across projects
+find ~/projects -name "pending-notification.txt" -path "*/.ralph/*" 2>/dev/null
+
+# Or check a specific project
+cat /path/to/project/.ralph/pending-notification.txt
+```
+
+### Recovery Actions by Message Prefix
+
+| Prefix | Action |
+|--------|--------|
+| `DONE:` | Report completion to user, summarize what was built |
+| `PLANNING_COMPLETE:` | Inform user, ask if ready for BUILDING mode |
+| `PROGRESS:` | Log it, update user if significant |
+| `DECISION:` | Present options to user, wait for answer, inject into AGENTS.md |
+| `ERROR:` | Check logs (`.ralph/ralph.log`), analyze, help or escalate |
+| `BLOCKED:` | Escalate to user immediately with full context |
+| `QUESTION:` | Present to user, get clarification, inject into AGENTS.md |
+
+### Injecting Responses
+
+To answer a decision/question for the next iteration:
+```bash
+echo "## Human Decisions
+- [$(date '+%Y-%m-%d %H:%M')] Q: <question>? A: <answer>" >> AGENTS.md
+```
+
+The next Codex session will read AGENTS.md and see the answer.
+
+### Clearing Notifications
+
+After processing a notification, clear it:
+```bash
+mv .ralph/pending-notification.txt .ralph/last-notification.txt
+```
+
+---
 
 ## Workflow
 
@@ -83,6 +152,9 @@ Break the goal into **topics of concern** → `specs/*.md`:
 Run after each implementation:
 1. `ruff check . --fix`
 2. `pytest`
+
+## Human Decisions
+<!-- Decisions made by humans are recorded here -->
 
 ## Learnings
 <!-- Agent appends operational notes here -->
@@ -178,120 +250,53 @@ openclaw gateway wake --text "DONE: All tasks complete. Summary: <what was built
 ```
 ```
 
-### 5. Generate the Loop Script
+### 5. Run the Loop
 
-#### Minimal (Geoff-style)
+Use the provided `scripts/ralph.sh`:
+
 ```bash
-while :; do codex exec --full-auto "$(cat PROMPT.md)"; done
+# Default: 20 iterations with Codex
+./scripts/ralph.sh 20
+
+# With Claude Code
+RALPH_CLI=claude ./scripts/ralph.sh 10
+
+# With tests
+RALPH_TEST="pytest" ./scripts/ralph.sh
 ```
 
-#### Controlled Loop (Recommended)
+---
+
+## Parallel Execution
+
+For independent tasks, use git worktrees:
+
 ```bash
-#!/usr/bin/env bash
-set -euo pipefail
+# Create worktrees for parallel work
+git worktree add /tmp/task-auth main
+git worktree add /tmp/task-upload main
 
-# Configuration
-MAX_ITERS=${1:-20}
-CLI="codex"
-CLI_FLAGS="--full-auto"
-TEST_CMD="pytest"
-PLAN_FILE="IMPLEMENTATION_PLAN.md"
-LOG_DIR=".ralph"
-LOG_FILE="$LOG_DIR/ralph.log"
-
-# Completion markers
-PLANNING_DONE="STATUS: PLANNING_COMPLETE"
-BUILDING_DONE="STATUS: COMPLETE"
-
-# Setup
-mkdir -p "$LOG_DIR"
-touch PROMPT.md AGENTS.md "$PLAN_FILE"
-
-if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  echo "❌ Must run inside a git repository"
-  exit 1
-fi
-
-log() {
-  echo -e "[$(date '+%H:%M:%S')] $*" | tee -a "$LOG_FILE"
-}
-
-notify() {
-  openclaw gateway wake --text "$1" --mode now 2>/dev/null || true
-}
-
-# Main loop
-for i in $(seq 1 "$MAX_ITERS"); do
-  log "=== Iteration $i/$MAX_ITERS ==="
-  
-  # Run the agent
-  $CLI exec $CLI_FLAGS "$(cat PROMPT.md)" 2>&1 | tee -a "$LOG_FILE"
-  EXIT_CODE=${PIPESTATUS[0]}
-  
-  if [[ $EXIT_CODE -ne 0 ]]; then
-    log "⚠️ Agent exited with code $EXIT_CODE"
-    notify "ERROR: Agent crashed on iteration $i. Check logs."
-    sleep 5
-    continue
-  fi
-  
-  # Run tests if in building mode
-  if [[ -n "$TEST_CMD" ]] && grep -q "BUILDING" PROMPT.md 2>/dev/null; then
-    log "Running tests: $TEST_CMD"
-    if ! bash -lc "$TEST_CMD" 2>&1 | tee -a "$LOG_FILE"; then
-      log "⚠️ Tests failed"
-    fi
-  fi
-  
-  # Check completion
-  if grep -Fq "$BUILDING_DONE" "$PLAN_FILE" 2>/dev/null; then
-    log "✅ All tasks complete!"
-    notify "DONE: Ralph loop finished. All tasks complete."
-    exit 0
-  fi
-  
-  if grep -Fq "$PLANNING_DONE" "$PLAN_FILE" 2>/dev/null; then
-    log "📋 Planning complete. Switch PROMPT.md to BUILDING mode."
-    notify "PLANNING: Complete. Ready to switch to BUILDING mode."
-    exit 0
-  fi
-  
-  # Brief pause between iterations
-  sleep 2
-done
-
-log "❌ Max iterations ($MAX_ITERS) reached"
-notify "BLOCKED: Max iterations reached without completion."
-exit 1
+# Spawn parallel sessions (each is clean/fresh)
+exec pty:true background:true workdir:/tmp/task-auth command:"codex exec --full-auto 'Implement user authentication...'"
+exec pty:true background:true workdir:/tmp/task-upload command:"codex exec --full-auto 'Implement image upload...'"
 ```
 
-## Event Handling (for OpenClaw)
+Track sessions:
 
-When I receive a wake notification from the Ralph loop, I should:
+| Session ID | Worktree | Task | Status |
+|------------|----------|------|--------|
+| abc123 | /tmp/task-auth | Auth module | running |
+| def456 | /tmp/task-upload | Image upload | running |
 
-| Prefix | Action |
-|--------|--------|
-| `DONE:` | Report completion to user, summarize what was built |
-| `PROGRESS:` | Log it, optionally update user if significant |
-| `DECISION:` | Present options to user, wait for answer, then inject response |
-| `ERROR:` | Analyze the error, attempt to help, or escalate to user |
-| `BLOCKED:` | Escalate to user immediately with context |
-| `QUESTION:` | Present question to user, get clarification |
+Each Codex notifies independently. Check `.ralph/pending-notification.txt` in each worktree.
 
-### Injecting Responses
-
-To send a decision back to the running loop, append to AGENTS.md:
-```markdown
-## Human Decisions
-- [2024-01-15 14:30] Q: SQLite vs PostgreSQL? A: Use SQLite for simplicity.
-```
-
-The next iteration will read AGENTS.md and see the answer.
+---
 
 ## CLI-Specific Notes
 
 ### Codex
 - Requires git repository
+- **Each `codex exec` is a fresh session** — no memory between calls
 - `--full-auto`: Auto-approve in workspace (sandboxed)
 - `--yolo`: No sandbox, no approvals (dangerous but fast)
 - Default model: gpt-5.2-codex
@@ -299,12 +304,15 @@ The next iteration will read AGENTS.md and see the answer.
 ### Claude Code
 - `--dangerously-skip-permissions`: Auto-approve (use in sandbox)
 - No git requirement
+- Each invocation is fresh
 
 ### OpenCode
 - `opencode run "$(cat PROMPT.md)"`
 
 ### Goose
 - `goose run "$(cat PROMPT.md)"`
+
+---
 
 ## Safety
 
@@ -314,40 +322,45 @@ The next iteration will read AGENTS.md and see the answer.
 3. Have `git reset --hard` ready as escape hatch
 4. Review commits before pushing
 
+---
+
 ## Quick Start
 
 ```bash
 # 1. Create project directory
 mkdir my-project && cd my-project && git init
 
-# 2. Create initial files
-cat > PROMPT.md << 'EOF'
-# Ralph PLANNING Loop
-## Goal
-Build a web app that...
-...
-EOF
+# 2. Copy templates from skill
+cp /path/to/ralph-loop/templates/* .
+mv PROMPT-PLANNING.md PROMPT.md
 
-cat > AGENTS.md << 'EOF'
-# AGENTS.md
-## Commands
-- Test: `pytest`
-...
-EOF
-
+# 3. Create specs
 mkdir specs
 cat > specs/overview.md << 'EOF'
-# Overview
-...
+## Goal
+Build a web app that...
+
+## Tech Stack
+- Python 3.11 + FastAPI
+- SQLite
+- HTMX + Tailwind
+
+## Features
+1. Feature one
+2. Feature two
 EOF
 
-# 3. Run the loop
+# 4. Edit PROMPT.md with your goal
+
+# 5. Run the loop
 ./ralph.sh 20
 ```
 
+---
+
 ## Example: Antique Catalogue
 
-```bash
+```markdown
 # specs/overview.md
 ## Goal
 Web app for cataloguing antique items with metadata, images, and categories.
@@ -366,4 +379,8 @@ Web app for cataloguing antique items with metadata, images, and categories.
 5. Multiple view modes (grid, list, detail)
 ```
 
-The agent will break this into tasks, implement each, test, and notify on completion.
+The agent will:
+1. (PLANNING) Break this into 10-15 tasks
+2. (BUILDING) Implement each task, one per iteration
+3. Commit after each successful implementation
+4. Notify on completion or if blocked

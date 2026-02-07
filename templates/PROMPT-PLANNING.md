@@ -41,7 +41,17 @@ Use this format in IMPLEMENTATION_PLAN.md:
 ```
 
 ## Notifications
-When you need input or finish:
+When you need input or finish, ALWAYS do both:
+
+1. Write to file (fallback for rate limits):
+```bash
+mkdir -p .ralph
+cat > .ralph/pending-notification.txt << EOF
+{"timestamp":"$(date -Iseconds)","message":"<PREFIX>: <message>","status":"pending"}
+EOF
+```
+
+2. Try wake notification:
 ```bash
 openclaw gateway wake --text "<PREFIX>: <message>" --mode now
 ```
@@ -57,7 +67,11 @@ When the plan is complete and comprehensive:
    ```
    STATUS: PLANNING_COMPLETE
    ```
-2. Notify:
+2. Notify (both file and wake):
    ```bash
-   openclaw gateway wake --text "DONE: Planning complete. X tasks identified." --mode now
+   mkdir -p .ralph
+   cat > .ralph/pending-notification.txt << EOF
+   {"timestamp":"$(date -Iseconds)","message":"PLANNING_COMPLETE: X tasks identified. Ready for BUILDING.","status":"pending"}
+   EOF
+   openclaw gateway wake --text "PLANNING_COMPLETE: X tasks identified. Ready for BUILDING mode." --mode now
    ```

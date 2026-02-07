@@ -6,7 +6,7 @@
 ## Context
 - Read: specs/*.md
 - Read: IMPLEMENTATION_PLAN.md (your task list)
-- Read: AGENTS.md (test commands, project conventions, learnings)
+- Read: AGENTS.md (test commands, project conventions, learnings, human decisions)
 
 ## Rules
 1. Pick the highest priority incomplete task from IMPLEMENTATION_PLAN.md
@@ -25,12 +25,22 @@
 ## Error Handling
 If you encounter issues:
 - Missing dependency: Try to add it, if unsure notify
-- Unclear requirement: Check specs/, if still unclear notify
+- Unclear requirement: Check specs/ and AGENTS.md (Human Decisions section), if still unclear notify
 - Repeated test failures: Notify after 3 attempts
 - Blocked by external factor: Notify immediately
 
 ## Notifications
-When you need input or hit milestones:
+When you need input or hit milestones, ALWAYS do both:
+
+1. Write to file (fallback for rate limits):
+```bash
+mkdir -p .ralph
+cat > .ralph/pending-notification.txt << EOF
+{"timestamp":"$(date -Iseconds)","message":"<PREFIX>: <message>","status":"pending"}
+EOF
+```
+
+2. Try wake notification:
 ```bash
 openclaw gateway wake --text "<PREFIX>: <message>" --mode now
 ```
@@ -49,7 +59,11 @@ When ALL tasks in IMPLEMENTATION_PLAN.md are marked done:
    ```
    STATUS: COMPLETE
    ```
-3. Notify with summary:
+3. Notify with summary (both file and wake):
    ```bash
+   mkdir -p .ralph
+   cat > .ralph/pending-notification.txt << EOF
+   {"timestamp":"$(date -Iseconds)","message":"DONE: All tasks complete. Built: <summary>","status":"pending"}
+   EOF
    openclaw gateway wake --text "DONE: All tasks complete. Built: <summary of what was created>" --mode now
    ```
