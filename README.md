@@ -24,8 +24,10 @@ An enhanced [Ralph pattern](https://ghuntley.com/ralph/) implementation with **e
 
 1. **PLANNING phase**: Agent analyzes specs, creates `IMPLEMENTATION_PLAN.md`
 2. **BUILDING phase**: Agent implements tasks one by one, tests, commits
-3. **Notifications**: Agent writes to `.ralph/pending-notification.txt` AND calls `openclaw gateway wake`
-4. **Recovery**: If wake fails (rate limit), notification persists in file for later processing
+3. **Notifications**: Agent writes to `.ralph/pending-notification.txt`
+4. **Pickup**: OpenClaw checks for pending notifications during heartbeats
+
+> **Note**: External processes (Codex, Claude Code) cannot directly wake OpenClaw — there's no CLI command for it. The file-based notification is the primary mechanism. Configure OpenClaw's HEARTBEAT.md to check for `.ralph/pending-notification.txt` files.
 
 ### Notification Format
 

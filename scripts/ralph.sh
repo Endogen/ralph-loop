@@ -84,18 +84,10 @@ EOF
   
   log "📝 Notification written to $NOTIFY_FILE"
   
-  # Try wake (may fail if rate limited)
-  if command -v openclaw &>/dev/null; then
-    if openclaw gateway wake --text "[$project_dir] $message" --mode now 2>/dev/null; then
-      # Wake succeeded - mark as delivered
-      sed -i 's/"status": "pending"/"status": "delivered"/' "$NOTIFY_FILE" 2>/dev/null || true
-      log "✅ Wake notification sent"
-    else
-      log "⚠️ Wake failed (rate limit?) - notification saved to file"
-    fi
-  else
-    log "⚠️ openclaw not found - notification saved to file only"
-  fi
+  # Note: There's no CLI command to wake OpenClaw from external processes.
+  # The file-based notification is the primary mechanism.
+  # OpenClaw should check .ralph/pending-notification.txt during heartbeats.
+  log "📋 Notification saved to $NOTIFY_FILE (check via heartbeat)"
 }
 
 # Clear pending notification (called by OpenClaw after processing)

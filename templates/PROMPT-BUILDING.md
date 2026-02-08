@@ -30,19 +30,13 @@ If you encounter issues:
 - Blocked by external factor: Notify immediately
 
 ## Notifications
-When you need input or hit milestones, ALWAYS do both:
+When you need input or hit milestones, write to the notification file:
 
-1. Write to file (fallback for rate limits):
 ```bash
 mkdir -p .ralph
-cat > .ralph/pending-notification.txt << EOF
+cat > .ralph/pending-notification.txt << 'EOF'
 {"timestamp":"$(date -Iseconds)","message":"<PREFIX>: <message>","status":"pending"}
 EOF
-```
-
-2. Try wake notification:
-```bash
-openclaw gateway wake --text "<PREFIX>: <message>" --mode now
 ```
 
 Prefixes:
@@ -52,6 +46,8 @@ Prefixes:
 - `PROGRESS:` — Major milestone complete (e.g., "Auth module done")
 - `DONE:` — All tasks complete
 
+> Note: OpenClaw will check this file during heartbeats and notify the human.
+
 ## Completion
 When ALL tasks in IMPLEMENTATION_PLAN.md are marked done:
 1. Run final test suite to verify everything works
@@ -59,11 +55,10 @@ When ALL tasks in IMPLEMENTATION_PLAN.md are marked done:
    ```
    STATUS: COMPLETE
    ```
-3. Notify with summary (both file and wake):
+3. Write completion notification:
    ```bash
    mkdir -p .ralph
-   cat > .ralph/pending-notification.txt << EOF
-   {"timestamp":"$(date -Iseconds)","message":"DONE: All tasks complete. Built: <summary>","status":"pending"}
+   cat > .ralph/pending-notification.txt << 'EOF'
+   {"timestamp":"$(date -Iseconds)","message":"DONE: All tasks complete.","status":"pending"}
    EOF
-   openclaw gateway wake --text "DONE: All tasks complete. Built: <summary of what was created>" --mode now
    ```
