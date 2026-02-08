@@ -8,7 +8,16 @@ set -euo pipefail
 # Defaults
 MAX_ITERS=${1:-20}
 CLI="${RALPH_CLI:-codex}"
-CLI_FLAGS="${RALPH_FLAGS:---full-auto}"
+# CLI-specific default flags
+if [[ -z "${RALPH_FLAGS:-}" ]]; then
+  case "${CLI}" in
+    codex)  CLI_FLAGS="-s workspace-write" ;;  # codex exec sandbox mode
+    claude) CLI_FLAGS="--dangerously-skip-permissions" ;;
+    *)      CLI_FLAGS="" ;;
+  esac
+else
+  CLI_FLAGS="${RALPH_FLAGS}"
+fi
 TEST_CMD="${RALPH_TEST:-}"
 PLAN_FILE="IMPLEMENTATION_PLAN.md"
 LOG_DIR=".ralph"
@@ -157,10 +166,12 @@ for i in $(seq 1 "$MAX_ITERS"); do
   # Build the command based on CLI
   case "$CLI" in
     codex)
+      # codex exec for non-interactive mode, flags go after exec
       CMD="codex exec $CLI_FLAGS"
       ;;
     claude)
-      CMD="claude $CLI_FLAGS"
+      # Claude Code uses --print for non-interactive
+      CMD="claude --print $CLI_FLAGS"
       ;;
     opencode)
       CMD="opencode run"

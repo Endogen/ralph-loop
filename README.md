@@ -113,6 +113,48 @@ cat /path/to/project/.ralph/pending-notification.txt
 mv .ralph/pending-notification.txt .ralph/last-notification.txt
 ```
 
+## System Requirements
+
+⚠️ **Memory**: AI coding agents can spike memory usage significantly. Recommended:
+- **8GB+ RAM** with **4GB+ swap**
+- Without swap, OOM killer may terminate the loop silently (signal 9)
+
+```bash
+# Add swap if needed
+sudo fallocate -l 4G /swapfile
+sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+```
+
+## Auto-Restart with systemd
+
+For long-running loops, use systemd to auto-restart on crashes:
+
+```bash
+# Create service file
+sudo tee /etc/systemd/system/ralph-loop.service << 'EOF'
+[Unit]
+Description=Ralph AI Loop
+After=network.target
+
+[Service]
+Type=simple
+User=YOUR_USER
+WorkingDirectory=/path/to/project
+ExecStart=/path/to/ralph.sh 50
+Restart=on-failure
+RestartSec=30
+Environment=RALPH_CLI=codex
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable ralph-loop
+sudo systemctl start ralph-loop
+```
+
 ## Safety
 
 ⚠️ Auto-approve flags (`--full-auto`, `--dangerously-skip-permissions`) give the agent write access.
