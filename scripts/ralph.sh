@@ -11,7 +11,7 @@ CLI="${RALPH_CLI:-codex}"
 # CLI-specific default flags
 if [[ -z "${RALPH_FLAGS:-}" ]]; then
   case "${CLI}" in
-    codex)  CLI_FLAGS="-s workspace-write" ;;  # codex exec sandbox mode
+    codex)  CLI_FLAGS="-s workspace-write" ;;
     claude) CLI_FLAGS="--dangerously-skip-permissions" ;;
     *)      CLI_FLAGS="" ;;
   esac
@@ -41,7 +41,7 @@ Usage: $(basename "$0") [max_iterations]
 
 Environment variables:
   RALPH_CLI    - CLI to use (codex, claude, opencode, goose) [default: codex]
-  RALPH_FLAGS  - CLI flags [default: --full-auto]
+  RALPH_FLAGS  - CLI flags [default: auto-detected per CLI]
   RALPH_TEST   - Test command to run after each iteration [optional]
 
 Examples:
@@ -61,13 +61,13 @@ log() {
   echo -e "[$(date '+%H:%M:%S')] $*" | tee -a "$LOG_FILE"
 }
 
-# Load Telegram notification config
-RALPH_ENV="${RALPH_ENV:-$HOME/.ralph.env}"
-[[ -f "$RALPH_ENV" ]] && source "$RALPH_ENV"
-
-# Send notification via Telegram + write to file
+# Send notification via OpenClaw cron + write details to file
+# The orchestrating agent (OpenClaw) will triage and decide whether to
+# forward to human or attempt to help.
 notify() {
-  local message="$1"
+  local prefix="$1"
+  local message="$2"
+  local details="${3:-}"
   local timestamp
   timestamp="$(date -Iseconds)"
   local project_dir
@@ -75,48 +75,42 @@ notify() {
   local project_name
   project_name="$(basename "$project_dir")"
   
-  # Always write to pending notification file (fallback)
+  # Write detailed notification for the orchestrating agent to triage
   cat > "$NOTIFY_FILE" << EOF
 {
   "timestamp": "$timestamp",
   "project": "$project_dir",
+  "project_name": "$project_name",
+  "prefix": "$prefix",
   "message": "$message",
+  "details": "$details",
   "iteration": ${CURRENT_ITER:-0},
   "max_iterations": $MAX_ITERS,
   "cli": "$CLI",
+  "log_tail": "$(tail -50 "$LOG_FILE" 2>/dev/null | base64 -w0)",
   "status": "pending"
 }
 EOF
   
-  # Try Telegram notification
-  if [[ -n "${RALPH_TELEGRAM_BOT_TOKEN:-}" ]] && [[ -n "${RALPH_TELEGRAM_CHAT_ID:-}" ]]; then
-    local tg_message="🐺 *Ralph* \`${project_name}\`
-${message}
-_Iteration ${CURRENT_ITER:-0}/${MAX_ITERS}_"
-    
-    local response
-    response=$(curl -s -X POST \
-      "https://api.telegram.org/bot${RALPH_TELEGRAM_BOT_TOKEN}/sendMessage" \
-      -d "chat_id=${RALPH_TELEGRAM_CHAT_ID}" \
-      -d "text=${tg_message}" \
-      -d "parse_mode=Markdown" \
-      2>&1)
-    
-    if echo "$response" | grep -q '"ok":true'; then
+  log "📝 Notification written to $NOTIFY_FILE"
+  
+  # Trigger OpenClaw via cron CLI (properly initializes scheduler state)
+  if command -v openclaw &>/dev/null; then
+    local event_text="[Ralph:${project_name}] ${prefix}: ${message}"
+    if openclaw cron add \
+      --name "ralph-${project_name}-notify" \
+      --at "5s" \
+      --session main \
+      --system-event "$event_text" \
+      --wake now \
+      --delete-after-run >/dev/null 2>&1; then
       sed -i 's/"status": "pending"/"status": "delivered"/' "$NOTIFY_FILE" 2>/dev/null || true
-      log "✅ Telegram notification sent"
+      log "✅ OpenClaw notification scheduled"
     else
-      log "⚠️ Telegram failed - notification saved to file"
+      log "⚠️ OpenClaw cron failed - notification saved to file for heartbeat pickup"
     fi
   else
-    log "📋 No Telegram config (~/.ralph.env) - notification saved to $NOTIFY_FILE"
-  fi
-}
-
-# Clear pending notification (called by OpenClaw after processing)
-clear_notification() {
-  if [[ -f "$NOTIFY_FILE" ]]; then
-    mv "$NOTIFY_FILE" "$LOG_DIR/last-notification.txt" 2>/dev/null || true
+    log "📋 openclaw not found - notification saved to $NOTIFY_FILE"
   fi
 }
 
@@ -143,14 +137,20 @@ if [[ ! -f "PROMPT.md" ]]; then
 - Read: specs/*.md, IMPLEMENTATION_PLAN.md, AGENTS.md
 
 ## Notifications
-When you need input or complete a milestone, write to .ralph/pending-notification.txt AND run:
+When you need input or hit a blocker, write to .ralph/pending-notification.txt:
 ```bash
+mkdir -p .ralph
 cat > .ralph/pending-notification.txt << 'NOTIFY'
-{"timestamp":"$(date -Iseconds)","message":"<PREFIX>: <your message>","status":"pending"}
+{"prefix":"ERROR","message":"Brief description","details":"Full context..."}
 NOTIFY
-openclaw gateway wake --text "<PREFIX>: <message>" --mode now
 ```
-Prefixes: DECISION, ERROR, BLOCKED, PROGRESS, DONE
+
+Prefixes:
+- DECISION: Need human input on a choice
+- ERROR: Tests failing after retries  
+- BLOCKED: Missing dependency or unclear spec
+- PROGRESS: Major milestone complete
+- DONE: All tasks finished
 
 ## Completion
 When finished, add to IMPLEMENTATION_PLAN.md: STATUS: COMPLETE
@@ -181,11 +181,9 @@ for i in $(seq 1 "$MAX_ITERS"); do
   # Build the command based on CLI
   case "$CLI" in
     codex)
-      # codex exec for non-interactive mode, flags go after exec
       CMD="codex exec $CLI_FLAGS"
       ;;
     claude)
-      # Claude Code uses --print for non-interactive
       CMD="claude --print $CLI_FLAGS"
       ;;
     opencode)
@@ -204,7 +202,7 @@ for i in $(seq 1 "$MAX_ITERS"); do
   if ! $CMD "$(cat PROMPT.md)" 2>&1 | tee -a "$LOG_FILE"; then
     EXIT_CODE=$?
     log "${YELLOW}⚠️ Agent exited with code $EXIT_CODE${NC}"
-    notify "ERROR: Agent crashed on iteration $i/$MAX_ITERS (exit $EXIT_CODE)"
+    notify "ERROR" "Agent crashed on iteration $i/$MAX_ITERS" "Exit code: $EXIT_CODE. Check log for details."
     sleep 5
     continue
   fi
@@ -222,13 +220,13 @@ for i in $(seq 1 "$MAX_ITERS"); do
   # Check completion markers
   if grep -Fq "$BUILDING_DONE" "$PLAN_FILE" 2>/dev/null; then
     log "${GREEN}✅ All tasks complete!${NC}"
-    notify "DONE: Ralph loop finished. All tasks complete."
+    notify "DONE" "All tasks complete" "Ralph loop finished successfully."
     exit 0
   fi
   
   if grep -Fq "$PLANNING_DONE" "$PLAN_FILE" 2>/dev/null; then
     log "${GREEN}📋 Planning phase complete${NC}"
-    notify "PLANNING_COMPLETE: Ready for BUILDING mode. Switch PROMPT.md and restart."
+    notify "PLANNING_COMPLETE" "Ready for BUILDING mode" "Switch PROMPT.md to PROMPT-BUILDING.md and restart."
     exit 0
   fi
   
@@ -237,5 +235,5 @@ for i in $(seq 1 "$MAX_ITERS"); do
 done
 
 log "${RED}❌ Max iterations ($MAX_ITERS) reached${NC}"
-notify "BLOCKED: Max iterations ($MAX_ITERS) reached without completion. Manual intervention needed."
+notify "BLOCKED" "Max iterations reached" "Completed $MAX_ITERS iterations without finishing. Manual review needed."
 exit 1

@@ -24,10 +24,34 @@ An enhanced [Ralph pattern](https://ghuntley.com/ralph/) implementation with **e
 
 1. **PLANNING phase**: Agent analyzes specs, creates `IMPLEMENTATION_PLAN.md`
 2. **BUILDING phase**: Agent implements tasks one by one, tests, commits
-3. **Notifications**: Agent writes to `.ralph/pending-notification.txt`
-4. **Pickup**: OpenClaw checks for pending notifications during heartbeats
+3. **Notifications**: Agent writes to `.ralph/pending-notification.txt` + triggers OpenClaw via cron
+4. **Triage**: OpenClaw receives notification, evaluates if it can help or needs to escalate to human
 
-> **Telegram Notifications**: The script sends notifications directly via Telegram Bot API for instant delivery. Configure `~/.ralph.env` with your bot token and chat ID. Falls back to `.ralph/pending-notification.txt` for heartbeat pickup if Telegram isn't configured.
+### Notification Flow
+
+```
+Codex/Claude ──► .ralph/pending-notification.txt
+     │                        │
+     └──► openclaw cron add ──┴──► OpenClaw (triage)
+                                        │
+                              ┌─────────┴─────────┐
+                              ▼                   ▼
+                        Can help?            Escalate
+                              │                   │
+                              ▼                   ▼
+                        Fix & restart      Notify human
+```
+
+### Notification Prefixes
+
+| Prefix | Meaning | Typical Action |
+|--------|---------|----------------|
+| `DONE` | All tasks complete | Notify human |
+| `PLANNING_COMPLETE` | Ready for building | Notify human |
+| `DECISION` | Need human input | Notify human |
+| `PROGRESS` | Milestone reached | Log, maybe notify |
+| `ERROR` | Tests failing | Triage: fix or escalate |
+| `BLOCKED` | Can't proceed | Triage: resolve or escalate |
 
 ### Notification Format
 
@@ -85,27 +109,11 @@ mkdir specs && echo "# Overview\n\nGoal: ..." > specs/overview.md
 | `templates/PROMPT-BUILDING.md` | Template for building phase |
 | `templates/AGENTS.md` | Template for project context |
 
-## Telegram Notifications
+## Requirements
 
-Get instant notifications when Ralph needs input or finishes:
-
-```bash
-# 1. Create a bot via @BotFather on Telegram
-# 2. Get your chat ID (message @userinfobot)
-# 3. Create ~/.ralph.env:
-
-cat > ~/.ralph.env << 'EOF'
-RALPH_TELEGRAM_BOT_TOKEN=your-bot-token-here
-RALPH_TELEGRAM_CHAT_ID=your-chat-id-here
-EOF
-
-chmod 600 ~/.ralph.env
-```
-
-You can also use the standalone notifier:
-```bash
-./scripts/notify.sh "Your message here"
-```
+- **OpenClaw** running with cron enabled (default)
+- **Git repository** (Ralph tracks changes via git)
+- **Coding CLI**: codex, claude, opencode, or goose
 
 ## Environment Variables
 
@@ -114,7 +122,6 @@ You can also use the standalone notifier:
 | `RALPH_CLI` | `codex` | CLI to use (codex, claude, opencode, goose) |
 | `RALPH_FLAGS` | (varies) | Flags for the CLI (auto-detected per CLI) |
 | `RALPH_TEST` | (none) | Test command to run each iteration |
-| `RALPH_ENV` | `~/.ralph.env` | Path to env file with Telegram config |
 
 ## Clean Sessions
 
