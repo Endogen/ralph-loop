@@ -61,15 +61,21 @@ log() {
   echo -e "[$(date '+%H:%M:%S')] $*" | tee -a "$LOG_FILE"
 }
 
-# Enhanced notification: write to file AND try wake
+# Load Telegram notification config
+RALPH_ENV="${RALPH_ENV:-$HOME/.ralph.env}"
+[[ -f "$RALPH_ENV" ]] && source "$RALPH_ENV"
+
+# Send notification via Telegram + write to file
 notify() {
   local message="$1"
   local timestamp
   timestamp="$(date -Iseconds)"
   local project_dir
   project_dir="$(pwd)"
+  local project_name
+  project_name="$(basename "$project_dir")"
   
-  # Always write to pending notification file (fallback for rate limits)
+  # Always write to pending notification file (fallback)
   cat > "$NOTIFY_FILE" << EOF
 {
   "timestamp": "$timestamp",
@@ -82,22 +88,28 @@ notify() {
 }
 EOF
   
-  log "📝 Notification written to $NOTIFY_FILE"
-  
-  # Try to notify OpenClaw via cron.add (creates one-shot system event)
-  if command -v openclaw &>/dev/null; then
-    local fire_at=$(($(date +%s) * 1000 + 2000))
-    local payload
-    payload=$(printf '{"job":{"name":"ralph-notify","schedule":{"kind":"at","atMs":%d},"payload":{"kind":"systemEvent","text":"[Ralph] %s"},"sessionTarget":"main"}}' "$fire_at" "$message")
+  # Try Telegram notification
+  if [[ -n "${RALPH_TELEGRAM_BOT_TOKEN:-}" ]] && [[ -n "${RALPH_TELEGRAM_CHAT_ID:-}" ]]; then
+    local tg_message="🐺 *Ralph* \`${project_name}\`
+${message}
+_Iteration ${CURRENT_ITER:-0}/${MAX_ITERS}_"
     
-    if openclaw gateway call cron.add --params "$payload" >/dev/null 2>&1; then
+    local response
+    response=$(curl -s -X POST \
+      "https://api.telegram.org/bot${RALPH_TELEGRAM_BOT_TOKEN}/sendMessage" \
+      -d "chat_id=${RALPH_TELEGRAM_CHAT_ID}" \
+      -d "text=${tg_message}" \
+      -d "parse_mode=Markdown" \
+      2>&1)
+    
+    if echo "$response" | grep -q '"ok":true'; then
       sed -i 's/"status": "pending"/"status": "delivered"/' "$NOTIFY_FILE" 2>/dev/null || true
-      log "✅ Notification sent via cron.add"
+      log "✅ Telegram notification sent"
     else
-      log "⚠️ cron.add failed - notification saved to file for heartbeat pickup"
+      log "⚠️ Telegram failed - notification saved to file"
     fi
   else
-    log "📋 openclaw not found - notification saved to $NOTIFY_FILE"
+    log "📋 No Telegram config (~/.ralph.env) - notification saved to $NOTIFY_FILE"
   fi
 }
 

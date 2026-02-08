@@ -27,7 +27,7 @@ An enhanced [Ralph pattern](https://ghuntley.com/ralph/) implementation with **e
 3. **Notifications**: Agent writes to `.ralph/pending-notification.txt`
 4. **Pickup**: OpenClaw checks for pending notifications during heartbeats
 
-> **Note**: The script uses `openclaw gateway call cron.add` to inject a one-shot system event that triggers notification. If that fails, notifications fall back to `.ralph/pending-notification.txt` which OpenClaw picks up during heartbeats.
+> **Telegram Notifications**: The script sends notifications directly via Telegram Bot API for instant delivery. Configure `~/.ralph.env` with your bot token and chat ID. Falls back to `.ralph/pending-notification.txt` for heartbeat pickup if Telegram isn't configured.
 
 ### Notification Format
 
@@ -85,13 +85,36 @@ mkdir specs && echo "# Overview\n\nGoal: ..." > specs/overview.md
 | `templates/PROMPT-BUILDING.md` | Template for building phase |
 | `templates/AGENTS.md` | Template for project context |
 
+## Telegram Notifications
+
+Get instant notifications when Ralph needs input or finishes:
+
+```bash
+# 1. Create a bot via @BotFather on Telegram
+# 2. Get your chat ID (message @userinfobot)
+# 3. Create ~/.ralph.env:
+
+cat > ~/.ralph.env << 'EOF'
+RALPH_TELEGRAM_BOT_TOKEN=your-bot-token-here
+RALPH_TELEGRAM_CHAT_ID=your-chat-id-here
+EOF
+
+chmod 600 ~/.ralph.env
+```
+
+You can also use the standalone notifier:
+```bash
+./scripts/notify.sh "Your message here"
+```
+
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `RALPH_CLI` | `codex` | CLI to use (codex, claude, opencode, goose) |
-| `RALPH_FLAGS` | `--full-auto` | Flags for the CLI |
+| `RALPH_FLAGS` | (varies) | Flags for the CLI (auto-detected per CLI) |
 | `RALPH_TEST` | (none) | Test command to run each iteration |
+| `RALPH_ENV` | `~/.ralph.env` | Path to env file with Telegram config |
 
 ## Clean Sessions
 
