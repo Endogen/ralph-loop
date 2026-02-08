@@ -84,10 +84,21 @@ EOF
   
   log "📝 Notification written to $NOTIFY_FILE"
   
-  # Note: There's no CLI command to wake OpenClaw from external processes.
-  # The file-based notification is the primary mechanism.
-  # OpenClaw should check .ralph/pending-notification.txt during heartbeats.
-  log "📋 Notification saved to $NOTIFY_FILE (check via heartbeat)"
+  # Try to notify OpenClaw via cron.add (creates one-shot system event)
+  if command -v openclaw &>/dev/null; then
+    local fire_at=$(($(date +%s) * 1000 + 2000))
+    local payload
+    payload=$(printf '{"job":{"name":"ralph-notify","schedule":{"kind":"at","atMs":%d},"payload":{"kind":"systemEvent","text":"[Ralph] %s"},"sessionTarget":"main"}}' "$fire_at" "$message")
+    
+    if openclaw gateway call cron.add --params "$payload" >/dev/null 2>&1; then
+      sed -i 's/"status": "pending"/"status": "delivered"/' "$NOTIFY_FILE" 2>/dev/null || true
+      log "✅ Notification sent via cron.add"
+    else
+      log "⚠️ cron.add failed - notification saved to file for heartbeat pickup"
+    fi
+  else
+    log "📋 openclaw not found - notification saved to $NOTIFY_FILE"
+  fi
 }
 
 # Clear pending notification (called by OpenClaw after processing)

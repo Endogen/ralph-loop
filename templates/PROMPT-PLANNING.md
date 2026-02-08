@@ -55,7 +55,7 @@ Prefixes:
 - `QUESTION:` — Requirements unclear, need clarification
 - `PLANNING_COMPLETE:` — Planning finished
 
-> Note: OpenClaw will check this file during heartbeats and notify the human.
+> The ralph.sh script will also try `openclaw gateway call cron.add` for immediate delivery.
 
 ## Completion
 When the plan is complete and comprehensive:

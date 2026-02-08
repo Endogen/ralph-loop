@@ -27,7 +27,7 @@ An enhanced [Ralph pattern](https://ghuntley.com/ralph/) implementation with **e
 3. **Notifications**: Agent writes to `.ralph/pending-notification.txt`
 4. **Pickup**: OpenClaw checks for pending notifications during heartbeats
 
-> **Note**: External processes (Codex, Claude Code) cannot directly wake OpenClaw — there's no CLI command for it. The file-based notification is the primary mechanism. Configure OpenClaw's HEARTBEAT.md to check for `.ralph/pending-notification.txt` files.
+> **Note**: The script uses `openclaw gateway call cron.add` to inject a one-shot system event that triggers notification. If that fails, notifications fall back to `.ralph/pending-notification.txt` which OpenClaw picks up during heartbeats.
 
 ### Notification Format
 

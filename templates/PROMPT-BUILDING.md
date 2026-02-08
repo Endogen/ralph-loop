@@ -46,7 +46,7 @@ Prefixes:
 - `PROGRESS:` — Major milestone complete (e.g., "Auth module done")
 - `DONE:` — All tasks complete
 
-> Note: OpenClaw will check this file during heartbeats and notify the human.
+> The ralph.sh script will also try `openclaw gateway call cron.add` for immediate delivery.
 
 ## Completion
 When ALL tasks in IMPLEMENTATION_PLAN.md are marked done:
