@@ -33,10 +33,27 @@ project/
 │   ├── overview.md
 │   └── <feature>.md
 └── .ralph/
-    ├── ralph.log                  # Execution log
+    ├── ralph.log                  # Execution log (human-readable)
+    ├── iterations.jsonl           # Structured iteration data (JSON lines)
+    ├── ralph.pid                  # PID of running loop
+    ├── config.json                # Loop configuration (optional)
+    ├── pause                      # Pause sentinel file (presence = paused)
+    ├── inject.md                  # Instructions to inject (appended to AGENTS.md)
     ├── pending-notification.txt   # Current pending notification (if any)
     └── last-notification.txt      # Previous notification (for reference)
 ```
+
+## Dashboard Integration
+
+The Ralph Dashboard (https://github.com/Endogen/ralph-dashboard) provides a web UI for monitoring and controlling loops. The script automatically writes structured data that the dashboard consumes:
+
+- **`iterations.jsonl`** — JSON line per iteration with timing, tokens, status, tasks, commits
+- **`ralph.pid`** — PID tracking so the dashboard knows if the loop is running
+- **`config.json`** — Dashboard can write config, script reads it on start
+- **`pause`** — Dashboard creates/removes this file to pause/resume
+- **`inject.md`** — Dashboard writes instructions, script appends to AGENTS.md
+
+All dashboard features are backward-compatible — the script works fine without the dashboard.
 
 ## Notification Format
 
@@ -56,6 +73,13 @@ project/
 Status values:
 - `pending` — Wake failed or not attempted
 - `delivered` — Wake succeeded
+
+## Iteration Data Format
+
+`.ralph/iterations.jsonl` (one JSON line per completed iteration):
+```json
+{"iteration":5,"max":50,"start":"2026-02-08T01:23:41+01:00","end":"2026-02-08T01:26:00+01:00","duration_seconds":139,"tokens":62.698,"status":"success","tasks_completed":["1.5"],"commit":"abc1234","commit_message":"Task 1.5: Add global exception handling","test_passed":true,"test_output":"33 passed","errors":[]}
+```
 
 ---
 
@@ -85,19 +109,67 @@ cat /path/to/project/.ralph/pending-notification.txt
 
 ### Injecting Responses
 
-To answer a decision/question for the next iteration:
+To answer a decision/question for the next iteration, either:
+
+**Via inject file (preferred — picked up automatically):**
+```bash
+echo "Use PostgreSQL instead of SQLite" > .ralph/inject.md
+```
+
+**Or directly into AGENTS.md:**
 ```bash
 echo "## Human Decisions
 - [$(date '+%Y-%m-%d %H:%M')] Q: <question>? A: <answer>" >> AGENTS.md
 ```
-
-The next Codex session will read AGENTS.md and see the answer.
 
 ### Clearing Notifications
 
 After processing a notification, clear it:
 ```bash
 mv .ralph/pending-notification.txt .ralph/last-notification.txt
+```
+
+---
+
+## Loop Control
+
+### Pause/Resume
+```bash
+# Pause (loop will pause between iterations)
+touch .ralph/pause
+
+# Resume
+rm .ralph/pause
+```
+
+### Inject Instructions
+```bash
+# Write instructions for next iteration
+echo "Switch to using async SQLAlchemy sessions" > .ralph/inject.md
+# Script will append to AGENTS.md and delete inject.md
+```
+
+### Configuration
+Create `.ralph/config.json` to configure the loop (env vars override):
+```json
+{
+  "cli": "codex",
+  "flags": "--full-auto",
+  "max_iterations": 50,
+  "test_command": "cd backend && .venv/bin/pytest --timeout=30"
+}
+```
+
+### Check Status
+```bash
+# Is it running?
+cat .ralph/ralph.pid && kill -0 $(cat .ralph/ralph.pid) 2>/dev/null && echo "running" || echo "stopped"
+
+# How many iterations?
+wc -l .ralph/iterations.jsonl
+
+# Last iteration stats
+tail -1 .ralph/iterations.jsonl | python3 -m json.tool
 ```
 
 ---
@@ -263,6 +335,15 @@ RALPH_CLI=claude ./scripts/ralph.sh 10
 
 # With tests
 RALPH_TEST="pytest" ./scripts/ralph.sh
+
+# With config file
+echo '{"cli":"codex","flags":"--full-auto","max_iterations":50}' > .ralph/config.json
+./scripts/ralph.sh
+```
+
+**Recommended: Run in tmux** (Codex needs a TTY):
+```bash
+tmux new-session -d -s my-project "./scripts/ralph.sh 50"
 ```
 
 ---
@@ -297,8 +378,8 @@ Each Codex notifies independently. Check `.ralph/pending-notification.txt` in ea
 ### Codex
 - Requires git repository
 - **Each `codex exec` is a fresh session** — no memory between calls
-- `--full-auto`: Auto-approve in workspace (sandboxed)
-- `--yolo`: No sandbox, no approvals (dangerous but fast)
+- `--full-auto`: Auto-approve (no sandbox restrictions, allows network)
+- `-s workspace-write`: Sandboxed to workspace writes (no network — deps must be pre-installed)
 - Default model: gpt-5.2-codex
 
 ### Claude Code
@@ -352,8 +433,8 @@ EOF
 
 # 4. Edit PROMPT.md with your goal
 
-# 5. Run the loop
-./ralph.sh 20
+# 5. Run the loop (in tmux for Codex)
+tmux new-session -d -s my-project "./scripts/ralph.sh 20"
 ```
 
 ---
